@@ -1,0 +1,98 @@
+---
+title: ""
+author: "Islam MD Tahidul"
+date: ""
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document: default
+  word_document: default
+---
+```{r}
+setwd("/Users/mdtahidulislam/Desktop/machine_learning_stat/contest2")
+```
+
+
+#Data Loading and Initial Exploration
+```{r}
+train_data <- read.csv("contest2data/train.csv")
+test_data <- read.csv("contest2data/test.csv")
+
+summary(train_data)
+str(train_data)
+head(train_data)
+```
+#Data Preprocessing
+```{r}
+sum(is.na(train_data))
+train_data$credit <- as.factor(train_data$credit)
+train_data$fraud <- as.factor(train_data$fraud)
+# Adjusting factor levels
+train_data$fraud <- factor(train_data$fraud, levels = c(0, 1), labels = c("NonFraud", "Fraud"))
+
+```
+
+#Feature Engineering
+```{r}
+# Example1: Interaction between duration and total amount
+train_data$interaction <- train_data$duration * train_data$total
+
+```
+
+#Model Building
+
+```{r}
+# Install ROSE package
+if (!require("ROSE")) {
+  install.packages("ROSE")
+  library(ROSE)
+}
+
+# Set up training control with ROSE for oversampling
+train_control <- trainControl(
+  method = "cv",
+  number = 10,
+  savePredictions = "final",
+  classProbs = TRUE,  # Enable class probability predictions
+  summaryFunction = twoClassSummary,  # For binary classification
+  sampling = "rose"  # Use ROSE for handling imbalance
+)
+
+# Train the model using Random Forest
+model <- train(
+  fraud ~ .,
+  data = train_data,
+  method = "rf",
+  metric = "ROC",  # Optimize based on ROC if class probabilities are important
+  trControl = train_control,
+  tuneLength = 5  # Explore a few tuning parameters
+)
+
+# Print the model to see the results
+print(model)
+
+```
+
+#Model Evaluation and Selection
+```{r}
+
+test_data$interaction <- test_data$duration * test_data$total
+
+test_data$fraud <- predict(model, newdata = test_data, type = "raw")
+```
+
+#Kaggle submission
+```{r}
+submission <- data.frame(id = test_data$id, fraud = test_data$fraud)
+
+# Convert factor labels back to 0 and 1 for submission
+submission$fraud <- ifelse(submission$fraud == "Fraud", 1, 0)
+
+# Prepare the submission file with numeric fraud labels
+write.csv(submission, "final_submission1.csv", row.names = FALSE)
+
+# Display the first few rows of the submission to verify
+head(submission)
+
+```
+
