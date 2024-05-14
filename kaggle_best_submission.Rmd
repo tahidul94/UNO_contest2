@@ -1,0 +1,342 @@
+---
+title: ""
+author: "Islam MD Tahidul"
+date: ""
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document: default
+  word_document: default
+---
+```{r}
+setwd("/Users/mdtahidulislam/Desktop/machine_learning_stat/contest2")
+```
+
+
+#Data Loading and Initial Exploration
+```{r}
+train_data <- read.csv("contest2data/train.csv")
+test_data <- read.csv("contest2data/test.csv")
+
+#summary(train_data)
+#str(train_data)
+#head(train_data)
+```
+#Data Preprocessing
+```{r}
+sum(is.na(train_data))
+train_data$credit <- as.factor(train_data$credit)
+train_data$fraud <- as.factor(train_data$fraud)
+# Adjusting factor levels
+train_data$fraud <- factor(train_data$fraud, levels = c(0, 1), labels = c("NonFraud", "Fraud"))
+
+```
+
+#Feature Engineering
+```{r}
+# Example1: Interaction between duration and total amount
+train_data$interaction <- train_data$duration * train_data$total
+test_data$interaction <- test_data$duration * test_data$total
+
+
+#Example2: Adding ratio features
+train_data$scan_to_total_ratio <- train_data$scans / train_data$total
+test_data$scan_to_total_ratio <- test_data$scans / test_data$total
+
+train_data$voided_to_scans_ratio <- train_data$voidedScans / train_data$scans
+test_data$voided_to_scans_ratio <- test_data$voidedScans / test_data$scans
+
+#Example3: Adding a composite risk score
+train_data$riskScore <- train_data$voidedScans * 0.5 + train_data$attemptsWoScan * 0.5
+test_data$riskScore <- test_data$voidedScans * 0.5 + test_data$attemptsWoScan * 0.5
+
+```
+
+
+
+
+
+#address data imbalance and gbm model
+```{r}
+# Load necessary libraries
+library(ROSE)
+library(DMwR2)  # Assuming this is the correct library for SMOTE if needed
+library(gbm)
+
+train_data$fraud <- as.factor(train_data$fraud)
+
+num_fraud <- nrow(train_data[train_data$fraud == "Fraud", ])
+num_non_fraud <- nrow(train_data[train_data$fraud == "NonFraud", ])
+
+# Determining the exact number of fraud cases needed to match non-fraud cases
+additional_fraud_needed <- num_non_fraud - num_fraud
+
+# Setting the target number for upsampling to exactly match non-fraud cases
+# This will double the number of fraud cases to match the non-fraud count
+target_count <- num_fraud + additional_fraud_needed
+
+# Upsampling the minority class to exactly match the majority class
+data_upsampled <- ovun.sample(fraud ~ ., data = train_data, method = "over", N = target_count + num_non_fraud)$data
+
+# Verifying the new distribution of classes
+table(data_upsampled$fraud)
+
+
+library(caret)
+library(gbm)
+
+# Prepare training control
+train_control1 <- trainControl(
+  method = "cv",
+  number = 10,
+  savePredictions = "final",
+  classProbs = TRUE,  # Save class probabilities for ROC analysis
+  summaryFunction = twoClassSummary  # Use AUC for model tuning
+)
+
+# Set up a grid for hyperparameter tuning
+gbmGrid <- expand.grid(
+  interaction.depth = c(1, 3, 5),
+  n.trees = c(100, 500, 1000),
+  shrinkage = c(0.01, 0.05, 0.1),
+  n.minobsinnode = c(10, 20)
+)
+
+# Train the model
+set.seed(1111)
+gbm_model1 <- train(
+  fraud ~ .,
+  data = data_upsampled,
+  method = "gbm",
+  trControl = train_control1,
+  verbose = FALSE,
+  metric = "ROC",
+  tuneGrid = gbmGrid
+)
+
+# Summary of the model
+print(gbm_model1)
+
+
+# Assuming 'gbm_model' is your trained model object
+importance <- summary(gbm_model1$finalModel, n.trees = 1000)
+importance
+
+
+
+library(gbm)
+library(caret)
+
+# Assuming your balanced dataset is 'data_upsampled' and is ready
+set.seed(1111)  # For reproducibility
+
+# Define the training control
+train_control2 <- trainControl(
+  method = "cv",
+  number = 10,
+  savePredictions = "final",
+  classProbs = TRUE,  # Save class probabilities for ROC analysis
+  summaryFunction = twoClassSummary  # Use AUC for model tuning
+)
+
+# Define the specific parameters of your best model
+best_model_params2 <- expand.grid(
+  interaction.depth = 5,     # Best depth
+  n.trees = 1000,            # Best number of trees
+  shrinkage = 0.1,           # Best shrinkage
+  n.minobsinnode = 10        # Best minimum number of observations in node
+)
+
+# Train the GBM model with the best parameters
+gbm_best_model <- train(
+  fraud ~ .,
+  data = data_upsampled,
+  method = "gbm",
+  trControl = train_control2,
+  verbose = FALSE,
+  tuneGrid = best_model_params2,
+  metric = "ROC"
+)
+
+# Summary of the best model
+print(gbm_best_model)
+
+
+
+test_data$riskScore <- test_data$voidedScans * 0.5 + test_data$attemptsWoScan * 0.5
+
+# Make probability predictions
+test_probabilities <- predict(gbm_best_model, newdata = test_data, type = "prob")
+fraud_probabilities <- test_probabilities[, "Fraud"]
+
+# Convert probabilities to binary labels with a threshold of 0.5
+test_predictions <- ifelse(fraud_probabilities >= 0.28, 1, 0)
+
+submission <- data.frame(id = test_data$id, fraud = test_predictions)
+write.csv(submission, "GBM_kaggle_submission15.csv", row.names = FALSE)
+
+```
+
+
+
+#GBM model
+
+```{r}
+library(caret)
+library(gbm)
+
+train_control <- trainControl(
+  method = "cv",  # Cross-validation
+  number = 10,    # Number of folds
+  verboseIter = TRUE,  # Print training iterations
+  savePredictions = "final",
+  classProbs = TRUE,  # Save class probabilities for ROC analysis
+  summaryFunction = twoClassSummary  # Use AUC for model tuning
+)
+
+gbmGrid <- expand.grid(
+  interaction.depth = c(1, 3, 5),  # Depth of variable interactions
+  n.trees = c(50, 100, 150,500,1000,1500),       # Number of trees
+  shrinkage = c(0.01,0.00001, 0.1),        # Learning rate
+  n.minobsinnode = c(10, 20)       # Minimum number of observations in the nodes
+)
+
+set.seed(1111)  # 
+gbm_model <- train(
+  fraud ~ .,  
+  data = train_data,  
+  method = "gbm",
+  trControl = train_control,
+  verbose = TRUE,
+  metric = "ROC",
+  tuneGrid = gbmGrid
+)
+
+#print(gbm_model)
+#summary(gbm_model)
+
+test_predictions <- predict(gbm_model, newdata = test_data, type = "prob")
+
+
+test_predictions <- predict(gbm_model, newdata = test_data, type = "raw")
+
+
+submission <- data.frame(id = test_data$id, fraud = as.numeric(test_predictions) - 1)
+write.csv(submission, "GBM_Kaggle_Submission5.csv", row.names = FALSE)
+
+```
+
+
+#XGboost R&D
+
+```{r}
+library(data.table)
+library(xgboost)
+
+train_data <- fread("contest2data/train.csv")
+test_data <- fread("contest2data/test.csv")
+
+# Example1: Interaction between duration and total amount
+train_data$interaction <- train_data$duration * train_data$total
+test_data$interaction <- test_data$duration * test_data$total
+
+# Example 2:
+train_data$scan_to_total_ratio <- train_data$scans / (train_data$total + 1e-8)
+test_data$scan_to_total_ratio <- test_data$scans / (test_data$total + 1e-8)
+
+train_data$voided_to_scans_ratio <- train_data$voidedScans / (train_data$scans + 1e-8)
+test_data$voided_to_scans_ratio <- test_data$voidedScans / (test_data$scans + 1e-8)
+
+
+
+
+# Convert 'credit' in both train and test datasets from 'High'/'Low' to numeric (1/0)
+train_data[, credit := as.numeric(credit == "High")]
+test_data[, credit := as.numeric(credit == "High")]
+
+# Convert 'fraud' in training data from factor to numeric if it's a factor
+if (is.factor(train_data$fraud)) {
+    train_data[, fraud := as.numeric(fraud)]
+}
+
+# Prepare feature set, excluding 'fraud' if it's the target
+train_features <- setdiff(names(train_data), "fraud")
+
+# Prepare DMatrix objects
+train_matrix <- xgb.DMatrix(data = as.matrix(train_data[, train_features, with = FALSE]), label = train_data$fraud)
+test_matrix <- xgb.DMatrix(data = as.matrix(test_data[, train_features, with = FALSE]))
+
+# XGBoost model parameters for binary classification
+params <- list(
+    objective = "binary:logistic",
+    booster = "gbtree",
+    eval_metric = "auc",
+    eta = 0.2,
+    max_depth = 7
+)
+
+
+
+# Train the model
+model <- xgb.train(params = params, data = train_matrix, nrounds = 500)
+
+# Make predictions
+predictions <- predict(model, test_matrix)
+
+# Prepare the submission file
+submission <- data.table(id = test_data$id, fraud = ifelse(predictions > 0.1, 1, 0))
+fwrite(submission, file = "submission45.csv", quote = FALSE, sep = ",", row.names = FALSE)
+
+```
+
+
+# Best Kaggle submission by xgboost
+```{r}
+library(xgboost)
+library(readr)
+
+train_data <- read.csv("contest2data/train.csv")
+test_data <- read.csv("contest2data/test.csv")
+
+# Example1: Interaction between duration and total amount
+train_data$interaction <- train_data$duration * train_data$total
+test_data$interaction <- test_data$duration * test_data$total
+
+
+train_features <- data.matrix(train_data[, !(names(train_data) %in% c("id", "fraud"))])
+train_labels <- train_data$fraud
+test_features <- data.matrix(test_data[, !(names(test_data) %in% c("id"))])
+
+#parameters
+params <- list(booster = "gbtree", 
+               objective = "binary:logistic",
+               eta = 0.2, 
+               max_depth = 6, 
+               min_child_weight = 1,
+               subsample = 1,
+               colsample_bytree = 1)
+
+dtrain <- xgb.DMatrix(data = train_features, 
+                      label = train_labels)
+
+xgb_model <- xgb.train(params = params, 
+                       data = dtrain, 
+                       nrounds = 500)
+
+
+dtest <- xgb.DMatrix(data = test_features)
+
+predictions_xgb <- predict(xgb_model, 
+                           newdata = dtest)
+
+
+submission <- data.frame(id = test_data$id, 
+                         fraud = as.numeric(predictions_xgb > 0.3))
+
+write.csv(submission, "final_final.csv", row.names = FALSE)
+
+```
+
+
+
+
